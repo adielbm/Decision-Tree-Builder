@@ -3,8 +3,11 @@ import reactLogo from './assets/react.svg'
 import viteLogo from '/vite.svg'
 import './App.css'
 
+
 function App() {
   const [tree, setTree] = useState(null);
+  // Track expanded/collapsed state for nodes by their unique path
+  const [expanded, setExpanded] = useState({});
 
   // Import JSON
   const handleImport = (e) => {
@@ -30,7 +33,7 @@ function App() {
   const addOption = (parent, type) => {
     const newOption =
       type === "Node"
-        ? { title: "", image: "", question_for_optiuons: "", options: [] }
+        ? { title: "", image: "", question_for_options: "", options: [] }
         : { title: "", image: "", link: "" };
     parent.options.push(newOption);
     setTree({ ...tree });
@@ -43,13 +46,32 @@ function App() {
     setTree({ ...tree });
   };
 
+
+  // Helper to get a unique path for each node
+  const getNodePath = (parent, idx, path = "") => {
+    if (!parent && idx === null) return "root";
+    return path ? `${path}.${idx}` : `${idx}`;
+  };
+
+  // Toggle expanded/collapsed state for a node
+  const toggleExpanded = (path) => {
+    setExpanded((prev) => {
+      const current = prev[path];
+      // If undefined, treat as expanded, so toggle to collapsed
+      return { ...prev, [path]: current === undefined ? false : !current };
+    });
+  };
+
   // Render Node/Terminal recursively
-  const renderNode = (node, parent = null, idx = null) => {
+  const renderNode = (node, parent = null, idx = null, path = "root") => {
     if (!node) return null;
     if (node.options) {
       // Node
+      const nodePath = getNodePath(parent, idx, path);
+  const isExpanded = expanded[nodePath] !== false;
+
       return (
-        <div style={{ border: "1px solid #ccc", margin: 8, padding: 18, position: "relative" }}>
+        <div style={{ border: "2px solid #7e7e7eff", margin: 1, padding: 8, position: "relative" }}>
           {parent && (
             <button
               style={{ position: "absolute", top: 0, right: 0, background: "#ff4d4f", color: "#fff", border: "none", borderRadius: "4px", padding: "2px 4px", cursor: "pointer" }}
@@ -59,7 +81,8 @@ function App() {
               ✕
             </button>
           )}
-          <div>
+          <div style={{ direction: "rtl" }}>
+            <label htmlFor="title">כותרת</label>
             <input
               name="title"
               placeholder="כותרת"
@@ -67,33 +90,61 @@ function App() {
               style={{ direction: "rtl", width: "100px" }}
               onChange={(e) => { node.title = e.target.value; setTree({ ...tree }); }}
             />
+          </div>
+          <div style={{ direction: "rtl" }}>
+            <label htmlFor="image">תמונה</label>
             <input
+              name="image"
               placeholder="URL לתמונה"
               value={node.image}
               onChange={(e) => { node.image = e.target.value; setTree({ ...tree }); }}
             />
+          </div>
+          <div style={{ direction: "rtl" }}>
+            <label htmlFor="question_for_options">שאלה</label>
             <input
+              name="question_for_options"  
               placeholder="שאלה"
               style={{ direction: "rtl", width: "300px" }}
-              value={node.question_for_optiuons}
-              onChange={(e) => { node.question_for_optiuons = e.target.value; setTree({ ...tree }); }}
+              value={node.question_for_options}
+              onChange={(e) => { node.question_for_options = e.target.value; setTree({ ...tree }); }}
             />
           </div>
           <div>
             <button onClick={() => addOption(node, "Node")}>Add Option</button>
             <button style={{ backgroundColor: "#004cff", color: "#fff" }} onClick={() => addOption(node, "Terminal")}>Add Link</button>
           </div>
-          <div style={{ marginLeft: 16, display: "flex", flexWrap: "wrap", gap: "8px" }}>
-            {node.options.map((opt, i) => (
-              <div key={i}>{renderNode(opt, node, i)}</div>
-            ))}
+          {/* Children area with toggle and indicator */}
+          <div style={{ marginTop: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <button
+                style={{ background: isExpanded ? "#eee" : "#ccc", color: "#333", border: "none", borderRadius: "4px", padding: "2px 8px", cursor: "pointer" }}
+                title={isExpanded ? "Hide children" : "Show children"}
+                onClick={() => toggleExpanded(nodePath)}
+              >
+                {isExpanded ? "Hide Children" : "Show Children"}
+              </button>
+              {/* Indicator if children are hidden */}
+              {!isExpanded && node.options.length > 0 && (
+                <span style={{ background: "#ffc107", color: "#333", borderRadius: "8px", padding: "2px 8px", fontSize: "0.9em" }}>
+                  {node.options.length} hidden
+                </span>
+              )}
+            </div>
+            {isExpanded && (
+              <div style={{ marginLeft: 16, display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                {node.options.map((opt, i) => (
+                  <div key={i}>{renderNode(opt, node, i, nodePath)}</div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       );
     } else {
       // Terminal
       return (
-        <div style={{ border: "1px dashed #004cff", margin: 8, padding: 8, position: "relative" }}>
+        <div style={{ border: "2px solid #004cff", margin: 8, padding: 8, position: "relative" }}>
           {parent && (
             <button
               style={{ position: "absolute", top: 0, right: 0, background: "#ff4d4f", color: "#fff", border: "none", borderRadius: "4px", padding: "2px 4px", cursor: "pointer" }}
@@ -132,7 +183,6 @@ function App() {
               value={node.link}
               onChange={(e) => { node.link = e.target.value; setTree({ ...tree }); }}
             />
-
           </div>
         </div>
       );
@@ -141,9 +191,8 @@ function App() {
 
   return (
     <div style={{ fontFamily: "sans-serif", padding: 16, minHeight: "100vh", display: "flex", flexDirection: "column" }}>
-      <h2>Decision Tree Builder</h2>
       <div>
-        <button onClick={() => setTree({ title: "", image: "", question_for_optiuons: "", options: [] })}>
+        <button onClick={() => setTree({ title: "", image: "", question_for_options: "", options: [] })}>
           New Tree
         </button>
         <input type="file" accept="application/json" onChange={handleImport} />
