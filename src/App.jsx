@@ -279,7 +279,23 @@ function App() {
 
     // Helper function to sanitize text for Mermaid
     function sanitize(text) {
-      return text.replace(/"/g, '#quot;').replace(/\n/g, ' ');
+      if (!text || text.trim() === '') {
+        return 'Empty';
+      }
+      // Handle Hebrew and special characters
+      return text
+        .replace(/"/g, '#quot;')
+        .replace(/\n/g, ' ')
+        .replace(/\{/g, '#123;') // Left brace
+        .replace(/\}/g, '#125;') // Right brace
+        .replace(/\[/g, '#91;')  // Left bracket
+        .replace(/\]/g, '#93;')  // Right bracket
+        .replace(/\(/g, '#40;')  // Left parenthesis
+        .replace(/\)/g, '#41;')  // Right parenthesis
+        .replace(/'/g, '#39;')   // Single quote
+        .replace(/&/g, '#38;')   // Ampersand
+        .replace(/<>/g, '#60;#62;') // Less than and greater than
+        .trim();
     }
 
     // Helper function to generate unique node ID
@@ -299,7 +315,9 @@ function App() {
       // Check if this is an internal link node
       if (item.type === 'internal_link') {
         // Internal Link node (orange diamond)
-        nodes.push(`${currentId}{{${sanitize(item.title)}}}`);
+        // Ensure we have a valid title for internal links
+        const linkTitle = sanitize(item.title);
+        nodes.push(`${currentId}{{${linkTitle}}}`);
         nodeClasses.push(`class ${currentId} internalLinkStyle`);
         if (parentId) {
           edges.push(`${parentId} --> ${currentId}`);
