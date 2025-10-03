@@ -2,9 +2,132 @@ import { useState, useEffect } from 'react'
 import reactLogo from './assets/react.svg'
 import viteLogo from '/vite.svg'
 import './App.css'
+import mermaid from 'mermaid'
 
 
 function App() {
+
+  // colors constants
+  const COLOR_LINK = '#d9efffff';
+  const COLOR_OPTION = '#ebffdfff';
+  const COLOR_QUESTION = '#ffd1efff';
+  const COLOR_INTERNAL_LINK = '#ffe1c4ff';
+  
+  const COLOR_QUESTION_STROKE = '#d10081ff';
+  const COLOR_LINK_STROKE = '#006ddaff';
+  const COLOR_OPTION_STROKE = '#4aac00ff';
+  const COLOR_INTERNAL_LINK_STROKE = '#e05624ff';
+
+
+  // Helper function to generate unique node IDs
+  const generateNodeId = () => {
+    const id = nextNodeId;
+    setNextNodeId(prev => prev + 1);
+    return id;
+  };
+
+  // Helper function to find the highest existing node ID in the tree
+  const getHighestNodeId = (node) => {
+    if (!node) return 0;
+    let maxId = 0;
+
+    // Check current node ID
+    if (typeof node.id === 'number') {
+      maxId = Math.max(maxId, node.id);
+    }
+
+    // Check children recursively
+    if (node.options && Array.isArray(node.options)) {
+      node.options.forEach(child => {
+        maxId = Math.max(maxId, getHighestNodeId(child));
+      });
+    }
+
+    return maxId;
+  };
+
+  // Helper function to ensure all nodes have IDs
+  const ensureNodeIds = (node, idCounter = { value: 1 }) => {
+    let nodeId;
+    
+    // Always assign an ID if missing or not a number
+    if (!node.id || typeof node.id !== 'number') {
+      nodeId = idCounter.value;
+      idCounter.value++;
+    } else {
+      nodeId = node.id;
+      // Update counter to be higher than existing ID
+      idCounter.value = Math.max(idCounter.value, node.id + 1);
+    }
+
+    // Create new object with id first, then all other properties
+    const { id, ...rest } = node;
+    const newNode = { id: nodeId, ...rest };
+    
+    // Process children if they exist
+    if (newNode.options && Array.isArray(newNode.options)) {
+      newNode.options = newNode.options.map(child => ensureNodeIds(child, idCounter));
+    }
+    
+    return newNode;
+  };
+
+  // Helper function to collect all nodes with their IDs and titles
+  const collectAllNodes = (node, nodes = []) => {
+    if (node && node.id) {
+      nodes.push({
+        id: node.id,
+        title: node.title || 'Untitled Node',
+        type: node.type || (node.options ? 'Node' : node.link !== undefined ? 'Terminal' : 'Internal Link')
+      });
+    }
+    if (node.options) {
+      node.options.forEach(child => collectAllNodes(child, nodes));
+    }
+    return nodes;
+  };
+
+  // Function to force assign IDs to all nodes
+  const forceAssignIds = () => {
+    const idCounter = { value: 1 };
+    const updatedTree = ensureNodeIds({ ...tree }, idCounter);
+    setTree(updatedTree);
+    setNextNodeId(idCounter.value);
+  };
+
+  // Function to jump to and focus on a target node
+  const jumpToNode = (targetNodeId) => {
+    if (!targetNodeId) return;
+    
+    // First switch to edit-tree tab if not already there
+    if (activeTab !== 'edit-tree') {
+      setActiveTab('edit-tree');
+    }
+    
+    // Use setTimeout to ensure tab content is rendered
+    setTimeout(() => {
+      const targetElement = document.querySelector(`[data-node-id="${targetNodeId}"]`);
+      if (targetElement) {
+        // Scroll to the target element with smooth behavior
+        targetElement.scrollIntoView({ 
+          behavior: 'smooth', 
+          block: 'center',
+          inline: 'nearest' 
+        });
+        
+        // Add focus highlight
+        setFocusedNodeId(parseInt(targetNodeId));
+        
+        // Remove focus highlight after 3 seconds
+        setTimeout(() => {
+          setFocusedNodeId(null);
+        }, 3000);
+      } else {
+        console.warn(`Target node with ID ${targetNodeId} not found in DOM`);
+      }
+    }, 100);
+  };
+
   // Helper functions for localStorage
   const saveTreeToStorage = (treeData) => {
     try {
@@ -21,20 +144,37 @@ function App() {
         const parsed = JSON.parse(saved);
         // Validate the parsed data has the expected structure
         if (parsed && typeof parsed === 'object') {
-          return parsed;
+          const idCounter = { value: 1 };
+          return ensureNodeIds(parsed, idCounter);
         }
       }
     } catch (error) {
       console.error('Failed to load tree from localStorage:', error);
     }
     // Return default tree if no saved data or error
-    return { title: "", image: "", question_for_options: "", options: [] };
+    return { id: 1, title: "", image: "", question_for_options: "", options: [] };
   };
 
   const [tree, setTree] = useState(loadTreeFromStorage);
+  const [nextNodeId, setNextNodeId] = useState(2); // Start from 2 since root is 1
   // Track expanded/collapsed state for nodes by their unique path
   const [expanded, setExpanded] = useState({});
   const [activeTab, setActiveTab] = useState('edit-tree');
+  const [mermaidContent, setMermaidContent] = useState(null);
+  const [focusedNodeId, setFocusedNodeId] = useState(null);
+
+  // Initialize nextNodeId based on existing tree data and ensure all nodes have IDs
+  useEffect(() => {
+    if (tree) {
+      // First ensure all nodes have IDs
+      const updatedTree = ensureNodeIds({ ...tree });
+      if (JSON.stringify(updatedTree) !== JSON.stringify(tree)) {
+        setTree(updatedTree);
+      }
+      const highestId = getHighestNodeId(updatedTree);
+      setNextNodeId(highestId + 1);
+    }
+  }, []); // Only run once on component mount
 
   // Autosave tree to localStorage whenever it changes
   useEffect(() => {
@@ -43,14 +183,99 @@ function App() {
     }
   }, [tree]);
 
+  // Initialize mermaid configuration
+  useEffect(() => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: 'default',
+      securityLevel: 'loose',
+      flowchart: {
+        useMaxWidth: true,
+        htmlLabels: true,
+        curve: 'basis'
+      }
+    });
+  }, []);
+
+  // Update mermaid content when switching to mermaid-preview tab or when tree changes
+  useEffect(() => {
+    const renderMermaidPreview = async () => {
+      if (!tree) {
+        return (
+          <div style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            height: "calc(100vh - 250px)",
+            border: "1px solid #ddd",
+            borderRadius: "4px",
+            background: "#f8f9fa",
+            color: "#6c757d",
+            fontSize: "18px"
+          }}>
+            No tree data to preview. Create or import a tree first.
+          </div>
+        );
+      }
+
+      try {
+        const mermaidCode = jsonToMermaid(tree);
+        const { svg } = await mermaid.render('mermaidPreview', mermaidCode);
+        return (
+          <div 
+            style={{
+              display: "flex",
+              justifyContent: "center",
+              alignItems: "flex-start",
+              padding: "16px",
+              height: "calc(100vh - 250px)",
+              overflow: "auto",
+              border: "1px solid #ddd",
+              borderRadius: "4px",
+              background: "#fff"
+            }}
+            dangerouslySetInnerHTML={{ __html: svg }}
+          />
+        );
+      } catch (error) {
+        console.error('Error rendering Mermaid diagram:', error);
+        return (
+          <div style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            height: "calc(100vh - 250px)",
+            border: "1px solid #ddd",
+            borderRadius: "4px",
+            background: "#f8f9fa",
+            color: "#dc3545",
+            fontSize: "16px",
+            flexDirection: "column",
+            padding: "20px",
+            textAlign: "center"
+          }}>
+            <div style={{ marginBottom: "10px" }}>❌ Error rendering Mermaid diagram</div>
+            <div style={{ fontSize: "14px", color: "#6c757d" }}>{error.message}</div>
+          </div>
+        );
+      }
+    };
+
+    if (activeTab === 'mermaid-preview') {
+      renderMermaidPreview().then(setMermaidContent);
+    }
+  }, [activeTab, tree]);
+
   // Convert tree to Mermaid flowchart syntax
   function jsonToMermaid(data) {
-    let mermaid = 'flowchart TD\n';
-    
+    let mermaid = 'flowchart RL\n';
+
     let nodeId = 0;
     const nodes = [];
     const edges = [];
     const nodeClasses = [];
+    const nodeIdMapping = new Map(); // Map node.id to mermaid node id
+    const internalLinkEdges = []; // Store internal link edges separately
 
     // Helper function to sanitize text for Mermaid
     function sanitize(text) {
@@ -66,8 +291,28 @@ function App() {
     function processNode(item, parentId = null) {
       const currentId = getNodeId();
 
+      // Store mapping for this node
+      if (item.id) {
+        nodeIdMapping.set(item.id, currentId);
+      }
+
+      // Check if this is an internal link node
+      if (item.type === 'internal_link') {
+        // Internal Link node (orange diamond)
+        nodes.push(`${currentId}{{${sanitize(item.title)}}}`);
+        nodeClasses.push(`class ${currentId} internalLinkStyle`);
+        if (parentId) {
+          edges.push(`${parentId} --> ${currentId}`);
+        }
+        // Store internal link edge for later processing
+        if (item.target_node_id) {
+          internalLinkEdges.push({ from: currentId, to: item.target_node_id });
+        }
+        return currentId;
+      }
+
       // Check if this is a link node
-      if (item.link) {
+      if (item.link !== undefined) {
         // Link node (blue circle)
         nodes.push(`${currentId}(("${sanitize(item.title)}"))`);
         nodeClasses.push(`class ${currentId} terminalStyle`);
@@ -120,114 +365,35 @@ function App() {
     // Start processing from root
     processNode(data);
 
+    // Process internal link edges
+    internalLinkEdges.forEach(linkEdge => {
+      const targetNodeId = parseInt(linkEdge.to); // Convert string to number
+      const targetMermaidId = nodeIdMapping.get(targetNodeId);
+      if (targetMermaidId) {
+        edges.push(`${linkEdge.from} -.-> ${targetMermaidId}`);
+      } else {
+        console.warn(`Internal link target node ID ${linkEdge.to} not found in nodeIdMapping`);
+      }
+    });
+
     // Build the complete Mermaid diagram
     mermaid += '    ' + nodes.join('\n    ') + '\n\n';
     mermaid += '    ' + edges.join('\n    ') + '\n\n';
-    
-    // colors constants
-    const COLOR_LINK = '#d9efffff';
-    const COLOR_OPTION = '#eaffdfff';
-    const COLOR_QUESTION = '#f7bbe2ff'; 
-    const COLOR_QUESTION_STROKE = '#a20092ff';
-    const COLOR_TERMINAL_STROKE = '#00478dff';
-    const COLOR_OPTION_STROKE = '#3e8e00ff';  
+
 
 
 
     // Add styling definitions
-    mermaid += `    classDef terminalStyle fill:${COLOR_LINK},stroke:${COLOR_TERMINAL_STROKE},stroke-width:2px,color:#000\n`;
+    mermaid += `    classDef terminalStyle fill:${COLOR_LINK},stroke:${COLOR_LINK_STROKE},stroke-width:2px,color:#000\n`;
     mermaid += `    classDef optionStyle fill:${COLOR_OPTION},stroke:${COLOR_OPTION_STROKE},stroke-width:2px,color:#000\n`;
     mermaid += `    classDef questionStyle fill:${COLOR_QUESTION},stroke:${COLOR_QUESTION_STROKE},stroke-width:2px,color:#000\n`;
+    mermaid += `    classDef internalLinkStyle fill:${COLOR_INTERNAL_LINK},stroke:${COLOR_INTERNAL_LINK_STROKE},stroke-width:2px,color:#000\n`;
 
     // Add class assignments
     mermaid += '    ' + nodeClasses.join('\n    ') + '\n';
 
     return mermaid;
   }
-
-
-
-  // Convert tree to Graphviz DOT notation
-  const convertTreeToGraphviz = (node, nodeId = 'root', parentId = null) => {
-    if (!node) return '';
-
-    let dotCode = '';
-    let connections = '';
-
-    // Escape text for DOT notation
-    const escapeText = (text) => {
-      if (!text) return 'Untitled';
-      return text.replace(/"/g, '\\"').replace(/\n/g, '\\n').substring(0, 30) + (text.length > 30 ? '...' : '');
-    };
-
-    if (node.options) {
-      // This is a decision node
-      const questionText = node.question_for_options?.trim();
-      if (questionText) {
-        // Questions use diamond shape with purple styling
-        const nodeLabel = escapeText(questionText);
-        dotCode += `    ${nodeId} [label="${nodeLabel}", shape=diamond, style=filled, fillcolor="#e1bee7", color="#7b1fa2", fontcolor=black];\n`;
-
-        // Add connection from parent if exists
-        if (parentId) {
-          connections += `    ${parentId} -> ${nodeId};\n`;
-        }
-
-        // Process children - create intermediate option nodes
-        node.options.forEach((option, index) => {
-          const optionNodeId = `${nodeId}_opt_${index}`;
-          const optionLabel = escapeText(option.title);
-          dotCode += `    ${optionNodeId} [label="${optionLabel}", shape=box, style=filled, fillcolor="#ffe0b2", color="#f57c00", fontcolor=black];\n`;
-          connections += `    ${nodeId} -> ${optionNodeId};\n`;
-
-          // Then create child node
-          const childId = `${nodeId}_${index}`;
-          const childResult = convertTreeToGraphviz(option, childId, optionNodeId);
-          dotCode += childResult.nodes;
-          connections += childResult.connections;
-        });
-      } else {
-        // Skip this node if no question - connect parent directly to children
-        node.options.forEach((option, index) => {
-          const optionNodeId = `${nodeId}_opt_${index}`;
-          const optionLabel = escapeText(option.title);
-          dotCode += `    ${optionNodeId} [label="${optionLabel}", shape=box, style=filled, fillcolor="#ffe0b2", color="#f57c00", fontcolor=black];\n`;
-
-          if (parentId) {
-            connections += `    ${parentId} -> ${optionNodeId};\n`;
-          }
-
-          // Then create child node
-          const childId = `${nodeId}_${index}`;
-          const childResult = convertTreeToGraphviz(option, childId, optionNodeId);
-          dotCode += childResult.nodes;
-          connections += childResult.connections;
-        });
-      }
-    } else {
-      // This is a terminal node - use ellipse shape with blue styling
-      const nodeLabel = escapeText(node.title);
-      dotCode += `    ${nodeId} [label="${nodeLabel}", shape=ellipse, style=filled, fillcolor="#bbdefb", color="#1976d2", fontcolor=black];\n`;
-
-      // Add connection from parent if exists
-      if (parentId) {
-        connections += `    ${parentId} -> ${nodeId};\n`;
-      }
-    }
-
-    return {
-      nodes: dotCode,
-      connections: connections
-    };
-  };
-
-  // Generate complete Graphviz DOT diagram
-  const generateGraphvizDiagram = () => {
-    if (!tree) return '';
-
-    const result = convertTreeToGraphviz(tree);
-    return `digraph DecisionTree {\n    rankdir=TB;\n    node [fontname="Arial"];\n    edge [fontname="Arial"];\n\n${result.nodes}\n${result.connections}}`;
-  };
 
 
 
@@ -238,7 +404,25 @@ function App() {
     if (!file) return;
     const reader = new FileReader();
     reader.onload = (evt) => {
-      setTree(JSON.parse(evt.target.result));
+      try {
+        const importedData = JSON.parse(evt.target.result);
+
+        // Ensure all imported nodes have IDs
+        const idCounter = { value: 1 };
+        const fixedData = ensureNodeIds({ ...importedData }, idCounter);
+
+        // Update the next node ID counter
+        setNextNodeId(idCounter.value);
+
+        // Set the fixed tree
+        setTree(fixedData);
+
+        console.log('Imported JSON successfully with IDs assigned');
+        console.log('Fixed data structure:', JSON.stringify(fixedData, null, 2));
+      } catch (error) {
+        console.error('Failed to import JSON:', error);
+        alert('Failed to import JSON file. Please check the file format.');
+      }
     };
     reader.readAsText(file);
   };
@@ -254,10 +438,13 @@ function App() {
 
   // Add Node/Terminal
   const addOption = (parent, type) => {
+    const nodeId = generateNodeId();
     const newOption =
       type === "Node"
-        ? { title: "", image: "", question_for_options: "", options: [] }
-        : { title: "", image: "", link: "" };
+        ? { id: nodeId, title: "", image: "", question_for_options: "", options: [] }
+        : type === "Terminal"
+          ? { id: nodeId, title: "", image: "", link: "" }
+          : { id: nodeId, title: "", target_node_id: "", type: "internal_link" };
     parent.options.push(newOption);
     setTree({ ...tree });
   };
@@ -288,7 +475,7 @@ function App() {
   };
 
   // Render Node/Terminal recursively
-  const renderNode = (node, parent = null, idx = null, path = "root") => {
+  const renderNode = (node, parent = null, idx = null, path = "root", rootTree = tree) => {
     if (!node) return null;
     if (node.options) {
       // Node
@@ -296,7 +483,17 @@ function App() {
       const isExpanded = expanded[nodePath] !== false;
 
       return (
-        <div style={{ border: "2px solid #7e7e7eff", margin: 1, padding: 8, position: "relative" }}>
+        <div 
+          data-node-id={node.id}
+          style={{ 
+            border: `2px solid ${COLOR_OPTION_STROKE}`, 
+            background: `${COLOR_OPTION}`, 
+            margin: 1, 
+            padding: 8, 
+            position: "relative",
+            boxShadow: focusedNodeId === node.id ? "0 0 20px 4px rgba(0, 122, 204, 0.6)" : "none",
+            transition: "box-shadow 0.3s ease"
+          }}>
           {parent && (
             <button
               style={{ position: "absolute", top: 0, right: 0, background: "#ff4d4f", color: "#fff", border: "none", borderRadius: "4px", padding: "2px 4px", cursor: "pointer" }}
@@ -340,33 +537,49 @@ function App() {
               onClick={() => addOption(node, "Node")}
               style={{
                 padding: "4px",
-                border: "2px solid #28a745",
+                border: `2px solid ${COLOR_OPTION_STROKE}`,
                 borderRadius: "6px",
                 background: "#fff",
-                color: "#28a745",
+                color: COLOR_OPTION_STROKE,
                 cursor: "pointer",
                 fontSize: "14px",
                 fontWeight: "500",
                 transition: "all 0.3s ease"
               }}
             >
-              Add Option
+              + Option
             </button>
             <button
               onClick={() => addOption(node, "Terminal")}
               style={{
                 padding: "4px",
-                border: "2px solid #007acc",
+                border: `2px solid ${COLOR_LINK_STROKE}`,
                 borderRadius: "6px",
                 background: "#fff",
-                color: "#007acc",
+                color: COLOR_LINK_STROKE,
                 cursor: "pointer",
                 fontSize: "14px",
                 fontWeight: "500",
                 transition: "all 0.3s ease"
               }}
             >
-              Add Link
+              + Link
+            </button>
+            <button
+              onClick={() => addOption(node, "InternalLink")}
+              style={{
+                padding: "4px",
+                border: `2px solid ${COLOR_INTERNAL_LINK_STROKE}`,
+                borderRadius: "6px",
+                background: "#fff",
+                color: COLOR_INTERNAL_LINK_STROKE,
+                cursor: "pointer",
+                fontSize: "14px",
+                fontWeight: "500",
+                transition: "all 0.3s ease"
+              }}
+            >
+              + In-Link
             </button>
             <button
               style={{
@@ -394,17 +607,101 @@ function App() {
             {isExpanded && (
               <div style={{ marginLeft: 16, display: "flex", flexWrap: "wrap", gap: "8px" }}>
                 {node.options.map((opt, i) => (
-                  <div key={i}>{renderNode(opt, node, i, nodePath)}</div>
+                  <div key={i}>{renderNode(opt, node, i, nodePath, rootTree)}</div>
                 ))}
               </div>
             )}
           </div>
         </div>
       );
+    } else if (node.type === 'internal_link') {
+      // Internal Link
+      const availableNodes = collectAllNodes(rootTree)
+        .filter(n => n.id !== node.id && n.type === 'Node'); // Only show Option nodes
+
+      return (
+        <div 
+          data-node-id={node.id}
+          style={{ 
+            border: `2px solid ${COLOR_INTERNAL_LINK_STROKE}`, 
+            background: `${COLOR_INTERNAL_LINK}`, 
+            margin: 8, 
+            padding: 8, 
+            position: "relative",
+            boxShadow: focusedNodeId === node.id ? "0 0 20px 4px rgba(224, 86, 36, 0.6)" : "none",
+            transition: "box-shadow 0.3s ease"
+          }}>
+          {parent && (
+            <button
+              style={{ position: "absolute", top: 0, right: 0, background: "#ff4d4f", color: "#fff", border: "none", borderRadius: "4px", padding: "2px 4px", cursor: "pointer" }}
+              title="Delete"
+              onClick={() => deleteOption(parent, idx)}
+            >
+              ✕
+            </button>
+          )}
+          <div style={{ direction: "rtl" }}>
+            <label htmlFor="title">כותרת</label>
+            <input
+              name='title'
+              placeholder="כותרת"
+              style={{ direction: "rtl", width: "200px" }}
+              value={node.title}
+              onChange={(e) => { node.title = e.target.value; setTree({ ...tree }); }}
+            />
+          </div>
+          <div style={{ direction: "rtl" }}>
+            <label htmlFor="target_node_id">קישור לצומת</label>
+            <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+              <select
+                name='target_node_id'
+                style={{ direction: "rtl", width: "200px", padding: "4px" }}
+                value={node.target_node_id || ''}
+                onChange={(e) => { node.target_node_id = e.target.value; setTree({ ...tree }); }}
+              >
+                <option value="">בחר צומת...</option>
+                {availableNodes.map(nodeOption => (
+                  <option key={nodeOption.id} value={nodeOption.id}>
+                    {nodeOption.title}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={() => jumpToNode(node.target_node_id)}
+                disabled={!node.target_node_id}
+                style={{
+                  padding: "4px 8px",
+                  border: "2px solid #007acc",
+                  borderRadius: "4px",
+                  background: node.target_node_id ? "#007acc" : "#f8f9fa",
+                  color: node.target_node_id ? "#fff" : "#6c757d",
+                  cursor: node.target_node_id ? "pointer" : "not-allowed",
+                  fontSize: "12px",
+                  fontWeight: "500",
+                  opacity: node.target_node_id ? 1 : 0.6
+                }}
+                title="קפוץ לצומת היעד"
+              >
+                🔗 קפיצה
+              </button>
+            </div>
+          </div>
+        </div>
+      );
     } else {
       // Terminal
       return (
-        <div style={{ border: "2px solid #004cff", margin: 8, padding: 8, position: "relative" }}>
+        <div 
+          data-node-id={node.id}
+          style={{ 
+            border: `2px solid ${COLOR_LINK_STROKE}`, 
+            background: `${COLOR_LINK}`, 
+            margin: 8, 
+            padding: 8, 
+            position: "relative",
+            boxShadow: focusedNodeId === node.id ? "0 0 20px 4px rgba(0, 109, 218, 0.6)" : "none",
+            transition: "box-shadow 0.3s ease"
+          }}>
           {parent && (
             <button
               style={{ position: "absolute", top: 0, right: 0, background: "#ff4d4f", color: "#fff", border: "none", borderRadius: "4px", padding: "2px 4px", cursor: "pointer" }}
@@ -454,7 +751,7 @@ function App() {
     { id: 'json-code', label: 'JSON Code' },
     { id: 'json-tree', label: 'JSON Tree' },
     { id: 'mermaid-code', label: 'Mermaid Code' },
-    { id: 'graphviz-code', label: 'Graphviz Code' }
+    { id: 'mermaid-preview', label: 'Mermaid Preview' },
   ];
 
   const renderTabContent = () => {
@@ -462,7 +759,7 @@ function App() {
       case 'edit-tree':
         return (
           <div style={{ flex: 1, width: "95vw", maxWidth: "95vw" }}>
-            {renderNode(tree, null, null)}
+            {renderNode(tree, null, null, "root", tree)}
           </div>
         );
 
@@ -670,30 +967,85 @@ function App() {
           </div>
         );
 
-      case 'graphviz-code':
-        const graphvizCode = tree ? generateGraphvizDiagram() : "No tree loaded.";
+      case 'mermaid-preview':
+        const refreshMermaidPreview = async () => {
+          if (!tree) {
+            const noTreeContent = (
+              <div style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                height: "calc(100vh - 250px)",
+                border: "1px solid #ddd",
+                borderRadius: "4px",
+                background: "#f8f9fa",
+                color: "#6c757d",
+                fontSize: "18px"
+              }}>
+                No tree data to preview. Create or import a tree first.
+              </div>
+            );
+            setMermaidContent(noTreeContent);
+            return;
+          }
 
-        const copyGraphvizToClipboard = () => {
-          navigator.clipboard.writeText(graphvizCode).then(() => {
-            alert('Graphviz code copied to clipboard!');
-          }).catch(err => {
-            console.error('Failed to copy: ', err);
-            alert('Failed to copy code to clipboard');
-          });
+          try {
+            const mermaidCode = jsonToMermaid(tree);
+            const { svg } = await mermaid.render('mermaidPreviewRefresh', mermaidCode);
+            const svgContent = (
+              <div 
+                style={{
+                  display: "flex",
+                  justifyContent: "center",
+                  alignItems: "flex-start",
+                  padding: "16px",
+                  height: "calc(100vh - 250px)",
+                  overflow: "auto",
+                  border: "1px solid #ddd",
+                  borderRadius: "4px",
+                  background: "#fff"
+                }}
+                dangerouslySetInnerHTML={{ __html: svg }}
+              />
+            );
+            setMermaidContent(svgContent);
+          } catch (error) {
+            console.error('Error rendering Mermaid diagram:', error);
+            const errorContent = (
+              <div style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                height: "calc(100vh - 250px)",
+                border: "1px solid #ddd",
+                borderRadius: "4px",
+                background: "#f8f9fa",
+                color: "#dc3545",
+                fontSize: "16px",
+                flexDirection: "column",
+                padding: "20px",
+                textAlign: "center"
+              }}>
+                <div style={{ marginBottom: "10px" }}>❌ Error rendering Mermaid diagram</div>
+                <div style={{ fontSize: "14px", color: "#6c757d" }}>{error.message}</div>
+              </div>
+            );
+            setMermaidContent(errorContent);
+          }
         };
 
         return (
           <div style={{ flex: 1, width: "95vw", maxWidth: "95vw" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-              <strong>Graphviz Code:</strong>
+              <strong>Mermaid Preview:</strong>
               <button
-                onClick={copyGraphvizToClipboard}
+                onClick={refreshMermaidPreview}
                 disabled={!tree}
                 style={{
                   padding: "6px 12px",
-                  border: "2px solid #28a745",
+                  border: "2px solid #007acc",
                   borderRadius: "4px",
-                  background: tree ? "#28a745" : "#f8f9fa",
+                  background: tree ? "#007acc" : "#f8f9fa",
                   color: tree ? "#fff" : "#6c757d",
                   cursor: tree ? "pointer" : "not-allowed",
                   fontSize: "14px",
@@ -701,47 +1053,10 @@ function App() {
                   opacity: tree ? 1 : 0.6
                 }}
               >
-                📋 Copy Code
+                🔄 Refresh Preview
               </button>
-              {/* link to GraphvizOnline */}
-              <a
-                href={`https://dreampuf.github.io/GraphvizOnline/?engine=fdp`}
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{
-                  padding: "6px 12px",
-                  border: "2px solid #d2d2d2ff",
-                  borderRadius: "4px",
-                  background: "#007acc",
-                  color: "#fff",
-                  cursor: "pointer",
-                  fontSize: "14px",
-                  fontWeight: "500",
-                  textDecoration: "none",
-                  display: "inline-block"
-                }}
-              >
-                GraphvizOnline
-              </a>
             </div>
-            <pre style={{
-              color: "#fff",
-              fontFamily: "monospace",
-              textAlign: "left",
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-word",
-              overflow: "auto",
-              background: "#2d2d2d",
-              border: "1px solid #ddd",
-              padding: "16px",
-              marginTop: "8px",
-              height: "calc(100vh - 250px)",
-              width: "95vw",
-              maxWidth: "95vw",
-              boxSizing: "border-box"
-            }}>
-              {graphvizCode}
-            </pre>
+            {mermaidContent}
           </div>
         );
 
